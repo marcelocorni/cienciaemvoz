@@ -1,0 +1,8 @@
+streamlit>=1.45,<2
+PyMuPDF>=1.25,<2
+openai>=1.75,<3
+imageio-ffmpeg>=0.6,<1
+python-dotenv>=1,<2
+pytest>=8,<10
+kokoro-onnx>=0.6.1,<1
+soundfile>=0.13,<1

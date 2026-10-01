@@ -1,0 +1,2 @@
+# Opcional: dispensável quando se usa um container Docling existente.
+docling>=2.70,<3
