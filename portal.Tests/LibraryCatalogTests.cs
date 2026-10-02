@@ -2,6 +2,8 @@ using CienciaEmVoz.Portal.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Text;
 
 namespace CienciaEmVoz.Portal.Tests;
 
@@ -9,7 +11,8 @@ public sealed class LibraryCatalogTests : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "ciencia-portal-test-" + Guid.NewGuid().ToString("N"));
     private readonly PortalOptions settings = new();
-    private LibraryCatalog Catalog => new(new TestEnvironment { ContentRootPath = root }, new TestOptions(settings));
+    private LibraryCatalog Catalog => new(new TestEnvironment { ContentRootPath = root }, new TestOptions(settings),
+        NullLogger<LibraryCatalog>.Instance);
     private void Add(string relative)
     {
         var path = Path.Combine(root, "transcricoes", relative);
@@ -69,6 +72,36 @@ public sealed class LibraryCatalogTests : IDisposable
         var tracks = Assert.Single(Catalog.GetDocuments()).Tracks;
         Assert.Equal("Resumo", tracks[0].Title);
         Assert.Equal("5.6.4 · Resultados", tracks[1].Title);
+    }
+    [Fact]
+    public void SidecarTitlePreservesAccentsAndAuthorAndUpdatesWithoutChangingRoutes()
+    {
+        Add("pdf/dissertacao.pdf"); Add("audio/001.mp3");
+        var catalog = Catalog;
+        var before = Assert.Single(catalog.GetDocuments());
+        var path = Path.Combine(root, "transcricoes/pdf/dissertacao.txt");
+        File.WriteAllText(path, "\n Dissertação de Marcelo Corni Alves\n", new UTF8Encoding(true));
+        var after = Assert.Single(catalog.GetDocuments());
+        Assert.Equal("Dissertação de Marcelo Corni Alves", after.Title);
+        Assert.Equal(before.Id, after.Id);
+        Assert.Equal(before.Tracks, after.Tracks);
+        File.WriteAllText(path, "Detecção de anomalias\n— Marcelo Corni Alves", Encoding.Unicode);
+        Assert.Equal("Detecção de anomalias — Marcelo Corni Alves", catalog.Find(after.Id)!.Title);
+    }
+    [Fact]
+    public void SidecarTakesPriorityOverConfiguredTitleAndFallsBackWhenInvalid()
+    {
+        Add("pdf/tese.pdf");
+        settings.Documents.Add(new() { Id = "tese", Title = "Título configurado", Pdf = "tese.pdf" });
+        var path = Path.Combine(root, "transcricoes/pdf/tese.txt");
+        File.WriteAllText(path, "Título no TXT");
+        Assert.Equal("Título no TXT", Catalog.Find("tese")!.Title);
+        File.WriteAllText(path, " \n ");
+        Assert.Equal("Título configurado", Catalog.Find("tese")!.Title);
+        File.WriteAllBytes(path, [0xff, 0xff, 0xff]);
+        Assert.Equal("Título configurado", Catalog.Find("tese")!.Title);
+        File.WriteAllText(path, new string('x', 16 * 1024 + 1));
+        Assert.Equal("Título configurado", Catalog.Find("tese")!.Title);
     }
     [Theory]
     [InlineData("../outside.pdf")]
