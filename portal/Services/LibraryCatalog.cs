@@ -25,7 +25,8 @@ public sealed record LibraryDocument(string Id, string Title, string Description
 {
     public string PdfUrl => $"/conteudo/{Uri.EscapeDataString(Id)}/pdf";
 }
-public sealed class LibraryCatalog(IWebHostEnvironment environment, IOptionsMonitor<PortalOptions> options)
+public sealed class LibraryCatalog(IWebHostEnvironment environment, IOptionsMonitor<PortalOptions> options,
+    ILogger<LibraryCatalog> logger)
 {
     public string Root => Path.GetFullPath(options.CurrentValue.LibraryPath, environment.ContentRootPath);
     public string? GithubUrl => Uri.TryCreate(options.CurrentValue.GithubUrl, UriKind.Absolute, out var uri)
@@ -47,7 +48,7 @@ public sealed class LibraryCatalog(IWebHostEnvironment environment, IOptionsMoni
             if (path is not null && !Path.GetExtension(path).Equals(".pdf", StringComparison.OrdinalIgnoreCase)) path = null;
             if (path is not null) usedPdfs.Add(path);
             var folder = string.IsNullOrEmpty(item.AudioFolder) ? audioRoot : SafeChild(audioRoot, item.AudioFolder);
-            result.Add(Create(item.Id, string.IsNullOrWhiteSpace(item.Title) ? DisplayTitle(item.Id) : item.Title,
+            result.Add(Create(item.Id, ReadTitle(path) ?? (string.IsNullOrWhiteSpace(item.Title) ? DisplayTitle(item.Id) : item.Title),
                 item.Description, path, folder));
         }
         foreach (var pdf in pdfs.Where(p => !usedPdfs.Contains(p)))
@@ -59,7 +60,7 @@ public sealed class LibraryCatalog(IWebHostEnvironment environment, IOptionsMoni
             var folder = SafeChild(audioRoot, stem);
             if (folder is null || !Directory.Exists(folder)) folder = SafeChild(audioRoot, slug);
             if ((folder is null || !Directory.Exists(folder)) && pdfs.Count == 1 && result.Count == 0) folder = audioRoot;
-            result.Add(Create(id, DisplayTitle(stem), "Leitura acompanhada de narração científica.", pdf, folder));
+            result.Add(Create(id, ReadTitle(pdf) ?? DisplayTitle(stem), "Leitura acompanhada de narração científica.", pdf, folder));
         }
         return result.Count == 0
             ? [new("dissertacao", "Dissertação", "O documento e os áudios serão disponibilizados em breve.", null, [])]
@@ -67,6 +68,28 @@ public sealed class LibraryCatalog(IWebHostEnvironment environment, IOptionsMoni
     }
     public LibraryDocument? Find(string id) => GetDocuments().FirstOrDefault(d => d.Id == id);
     public string? AudioPath(string id, string filename) => Find(id)?.Tracks.FirstOrDefault(t => t.FileName == filename)?.FilePath;
+    private string? ReadTitle(string? pdf)
+    {
+        if (pdf is null) return null;
+        var path = Path.ChangeExtension(pdf, ".txt");
+        try
+        {
+            if (!File.Exists(path)) return null;
+            // A title is metadata, not a full transcript. Accept UTF-8 and BOM-marked Unicode.
+            if (new FileInfo(path).Length > 16 * 1024)
+            {
+                logger.LogWarning("Arquivo de título excede 16 KB: {Path}", path);
+                return null;
+            }
+            var title = Regex.Replace(File.ReadAllText(path, new UTF8Encoding(false, true)), @"\s+", " ").Trim();
+            return title.Length == 0 ? null : title;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or DecoderFallbackException)
+        {
+            logger.LogWarning(error, "Não foi possível ler o arquivo de título: {Path}", path);
+            return null;
+        }
+    }
     private static LibraryDocument Create(string id, string title, string description, string? pdf, string? audioFolder)
     {
         var tracks = new List<AudioTrack>();

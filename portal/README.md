@@ -14,13 +14,14 @@ Abra **http://localhost:5080**. O primeiro comando restaura as dependências. Ap
 
 ## Adicionar a primeira dissertação
 
-Copie o PDF para `portal/transcricoes/pdf/` e os MP3 para `portal/transcricoes/audio/`. Com um único PDF na biblioteca, os MP3 diretamente na pasta `audio` pertencem a ele. O nome do PDF será usado como título. Clique em **Atualizar biblioteca** ou recarregue a página após adicionar ou remover arquivos.
+Copie o PDF para `portal/transcricoes/pdf/` e os MP3 para `portal/transcricoes/audio/`. Com um único PDF na biblioteca, os MP3 diretamente na pasta `audio` pertencem a ele. Para definir o título apresentado, coloque ao lado do PDF um TXT com o mesmo nome (exemplo: `dissertacao.pdf` e `dissertacao.txt`). Clique em **Atualizar biblioteca** ou recarregue a página após adicionar, remover ou editar arquivos.
 
 ```text
 portal/
   transcricoes/
     pdf/
       dissertacao.pdf
+      dissertacao.txt
     audio/
       001-resumo.mp3
       002-introducao.mp3
@@ -52,6 +53,16 @@ Ao adicionar um segundo PDF, mova os MP3 da primeira dissertação para a subpas
 Os MP3 são ordenados pelo nome em ordem natural: `1`, `2`, `10`. Recomenda-se prefixar os nomes com `001`, `002`, `003`, etc., para explicitar a sequência. Não há alinhamento automático entre seção de áudio e página do PDF.
 
 ## Personalizar títulos e o link do GitHub
+
+O arquivo `transcricoes/pdf/dissertacao.txt` pode conter, por exemplo:
+
+```text
+Dissertação de Marcelo Corni Alves
+```
+
+Use o título que desejar, com acentos e nome do autor. O texto será apresentado no menu e na página de leitura. Salve em UTF-8 (com ou sem BOM); UTF-16 com BOM também é aceito. Quebras de linha e espaços extras são convertidos em espaços, formando um único título. O arquivo deve ter até 16 KB.
+
+O título no TXT tem prioridade sobre `Documents.Title`. Se o TXT não existir, estiver vazio ou não puder ser lido, o portal usa o título configurado em `appsettings.json`; na descoberta automática, usa o nome do PDF. Alterar o TXT não muda a URL do documento, a associação dos MP3 nem sua ordem. Não é necessário reiniciar o portal, apenas atualizar a biblioteca.
 
 Em `appsettings.json`, a seção `Portal` tem um espaço para o repositório. Preencha `GithubUrl` com a URL HTTPS real, por exemplo `https://github.com/SEU-USUARIO/ciencia-em-voz`. Enquanto estiver vazio, a Home mostra um espaço reservado.
 
