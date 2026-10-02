@@ -4,12 +4,15 @@ import hashlib
 import json
 import os
 import logging
+import tempfile
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
 import streamlit as st
 
 from ciencia_voz.audio import Track, export_tracks, zip_package
+from ciencia_voz.text_input import decode_txt, import_pronunciations
 from ciencia_voz.demo import demo_pdf
 from ciencia_voz.pdf import analyze, custom_section, deduplicate, render_page
 from ciencia_voz.science import apply_glossary, chunk_text, local_narration, parse_glossary
@@ -22,6 +25,10 @@ st.set_page_config(page_title="Ciência em Voz", page_icon="🎧", layout="wide"
 models_dir = Path(os.getenv("KOKORO_MODELS_DIR", "models"))
 if not models_dir.is_absolute():
     models_dir = BASE / models_dir
+
+VOICE_OPTIONS = {"Português brasileiro": ["pf_dora", "pm_alex", "pm_santa"],
+                 "English": ["af_heart", "am_michael"], "Español": ["ef_dora", "em_alex"]}
+VOICE_LANGUAGES = {"Português brasileiro": "pt-br", "English": "en-us", "Español": "es"}
 
 
 def signature(value) -> str:
@@ -65,15 +72,52 @@ with st.sidebar:
         except Exception as exc:
             st.error(friendly_error(exc))
     voice_language = st.selectbox("Idioma da voz", ["Português brasileiro", "English", "Español"])
-    voice_options = {"Português brasileiro": ["pf_dora", "pm_alex", "pm_santa"],
-                     "English": ["af_heart", "am_michael"], "Español": ["ef_dora", "em_alex"]}
+    voice_options = VOICE_OPTIONS
     voice = st.selectbox("Voz Kokoro", voice_options[voice_language])
-    voice_lang = {"Português brasileiro": "pt-br", "English": "en-us", "Español": "es"}[voice_language]
-    speed = st.slider("Velocidade", .5, 1.5, 1.0, .05)
+    voice_lang = VOICE_LANGUAGES[voice_language]
+    speed = st.slider("Velocidade", .5, 2.0, 1.0, .05)
+    with st.expander("Ajustes da voz"):
+        pitch = st.slider("Altura da voz (semitons)", -6.0, 6.0, 0.0, 0.5,
+                          help="Negativo: mais grave. Positivo: mais aguda. A duração é preservada; ajustes grandes podem soar artificiais.")
+        volume_db = st.slider("Volume (dB)", -12.0, 6.0, 0.0, 1.0)
+        sentence_pause = st.slider("Pausa entre frases (segundos)", 0.0, 2.0, 0.25, 0.05)
+        clause_pause = st.slider("Pausa entre orações (segundos)", 0.0, 1.0, 0.1, 0.05)
+        st.caption("As pausas seguem a pontuação reconhecida pela voz. A divisão de trechos pode acrescentar intervalos.")
+    audio_settings = {"pitch": pitch, "volume_db": volume_db,
+                      "sentence_pause": sentence_pause, "clause_pause": clause_pause}
     language = st.selectbox("Idioma para a leitura de fórmulas", ["Português brasileiro", "English", "Español"])
     st.caption("O idioma dos parágrafos é preservado.")
-    glossary_raw = st.text_area("Pronúncias científicas", placeholder="ATP = a tê pê\nNaCl = cloreto de sódio",
+    # Capture the previous unkeyed editor once so existing sessions retain their glossary.
+    if "pronunciation_config" not in st.session_state:
+        legacy_editor = st.empty()
+        previous_glossary = legacy_editor.text_area("Pronúncias científicas", placeholder="ATP = a tê pê\nNaCl = cloreto de sódio",
+                                                    help="Uma entrada por linha: termo = pronúncia. Aplicado ao texto antes da revisão.")
+        st.session_state["pronunciation_config"] = previous_glossary
+        legacy_editor.empty()
+    with st.expander("Importar configuração de pronúncias"):
+        pronunciation_file = st.file_uploader("Arquivo de pronúncias", type=["txt", "conf"], key="pronunciation-file",
+                                              help="Até 5 MB. Uma entrada por linha: termo = pronúncia. Linhas iniciadas com # são comentários.")
+        import_behavior = st.radio("Como importar", ["Mesclar com as atuais", "Substituir todas"], key="pronunciation-import-behavior",
+                                   help="Ao mesclar, a pronúncia do arquivo prevalece para termos repetidos.")
+        if st.button("Importar pronúncias", disabled=pronunciation_file is None):
+            try:
+                updated_glossary = import_pronunciations(pronunciation_file.getvalue(),
+                    st.session_state["pronunciation_config"], replace=import_behavior == "Substituir todas")
+                st.session_state["pronunciation_config"] = updated_glossary
+                st.success(f"Configuração carregada: {len(parse_glossary(updated_glossary))} pronúncia(s).")
+            except ValueError as exc:
+                st.error(str(exc))
+    glossary_raw = st.text_area("Pronúncias científicas", key="pronunciation_config",
+                               placeholder="ATP = a tê pê\nNaCl = cloreto de sódio",
                                help="Uma entrada por linha: termo = pronúncia. Aplicado ao texto antes da revisão.")
+    try:
+        glossary_for_download = parse_glossary(glossary_raw)
+    except ValueError as exc:
+        st.error(str(exc))
+        glossary_for_download = {}
+    configuration_text = "\n".join(f"{term} = {pronunciation}" for term, pronunciation in glossary_for_download.items())
+    st.download_button("Baixar configuração de pronúncias", configuration_text.encode("utf-8"),
+                       "pronuncias.txt", mime="text/plain", disabled=not glossary_for_download)
     st.caption("Docling extrai o PDF; Ollama prepara as fórmulas; Kokoro gera a voz localmente.")
     st.caption("A voz não traduz o conteúdo: escolha o idioma correspondente ao texto.")
     ready_voice = all((models_dir / name).exists() for name in ["kokoro-v1.0.onnx", "voices-v1.0.bin"])
@@ -89,14 +133,192 @@ with st.sidebar:
         finally:
             bar.empty()
     with st.expander("Configurações avançadas"):
-        docling_container = st.text_input("Container Docling", os.getenv("DOCLING_CONTAINER", "dissertacao-rag-docling-1"),
+        docling_container = st.text_input("Container Docling", os.getenv("DOCLING_CONTAINER", ""),
                                           help="Vazio: usa Docling instalado no Python local.")
         formula_enrichment = st.checkbox("Reconhecer fórmulas no Docling", value=True)
         st.caption("O primeiro uso pode baixar os modelos gratuitos do Docling. Depois, a extração roda localmente.")
 
+    with st.expander("Ouvir uma prévia da voz", expanded=True):
+        preview_text = st.text_area("Texto da prévia", "A energia é igual à massa vezes a velocidade da luz ao quadrado.",
+                                    max_chars=500, height=100)
+        preview_key = signature([preview_text, glossary_raw, voice, voice_lang, speed, audio_settings])
+        if st.button("Gerar prévia da voz", disabled=not ready_voice or not preview_text.strip()):
+            try:
+                preview_narration = apply_glossary(preview_text, parse_glossary(glossary_raw))
+                with st.spinner("Preparando prévia…"):
+                    with tempfile.TemporaryDirectory(prefix="ciencia-voz-previa-") as temporary:
+                        preview_path = Path(temporary) / "previa.mp3"
+                        synthesize_kokoro(kokoro_engine(str(models_dir.resolve())), preview_narration,
+                                          preview_path, voice, speed, voice_lang, **audio_settings)
+                        st.session_state["voice_preview"] = (preview_key, preview_path.read_bytes())
+            except Exception as exc:
+                st.error(friendly_error(exc))
+        preview = st.session_state.get("voice_preview")
+        if preview and preview[0] == preview_key:
+            st.audio(preview[1], format="audio/mpeg")
+        elif preview:
+            st.caption("Gere outra prévia para ouvir os ajustes atuais.")
+
+def render_track_voice(key):
+    # Keep overrides independently of widget cleanup when switching input modes.
+    saved = st.session_state.setdefault("track_voice_overrides", {}).setdefault(key, {})
+    default = "Usar padrão da sidebar"
+    language_key = "track-language-" + key
+    if language_key not in st.session_state:
+        st.session_state[language_key] = saved.get("language", default)
+    left, right = st.columns(2)
+    chosen = left.selectbox("Idioma deste áudio", [default, *VOICE_OPTIONS], key=language_key,
+                            help="O padrão acompanha a sidebar. Uma escolha específica vale somente para este áudio e não traduz o texto.")
+    saved["language"] = chosen
+    effective_language = voice_language if chosen == default else chosen
+    voice_key = "track-voice-" + key + "-" + effective_language
+    if voice_key not in st.session_state:
+        st.session_state[voice_key] = saved.get("voices", {}).get(effective_language, default)
+    chosen_voice = right.selectbox("Voz deste áudio", [default, *VOICE_OPTIONS[effective_language]], key=voice_key,
+                                  help="Mostra apenas vozes compatíveis com o idioma deste áudio.")
+    saved.setdefault("voices", {})[effective_language] = chosen_voice
+    effective_voice = chosen_voice if chosen_voice != default else (
+        voice if effective_language == voice_language else VOICE_OPTIONS[effective_language][0])
+    st.caption(f"Este áudio: {effective_language} · {effective_voice}")
+    return effective_language, effective_voice
+
+
+def render_audio_export(tracks, review_key, *, use_ai=False, source_hash="", package_prefix="", stage=4):
+    settings_key = signature([review_key, voice, speed, voice_language, audio_settings,
+                              [[t.language, t.voice] for t in tracks]])
+    chars = sum(len(t.text) for t in tracks)
+    minutes = round(sum(len(t.text.split()) for t in tracks) / (140 * speed))
+    requests = sum(len(chunk_text(t.text, limit=700)) for t in tracks)
+    st.caption(f"{chars:,} caracteres · {requests} trecho(s) de voz local · duração aproximada: {max(1, minutes)} min.")
+    reviewed = st.checkbox("Revisei o texto, as fórmulas e as pronúncias", key="review-" + review_key)
+
+    st.subheader(f"{stage} · Gere e baixe seus áudios")
+    st.caption("Voz gerada por inteligência artificial. Os MP3 e as transcrições serão salvos em uma pasta própria para esta geração.")
+    if not ready_voice:
+        st.info("Baixe os arquivos de voz Kokoro na barra lateral para gerar MP3 sem serviços pagos.")
+    if st.button("Gerar arquivos MP3", type="primary", disabled=not (reviewed and ready_voice and all(t.text.strip() and t.title.strip() for t in tracks))):
+        bar = st.progress(0, text="Gerando áudio…")
+        try:
+            root = Path(os.getenv("AUDIO_OUTPUT_DIR", "audios"))
+            if not root.is_absolute():
+                root = BASE / root
+            engine = kokoro_engine(str(models_dir.resolve()))
+            folder = export_tracks(None, tracks, root, voice=voice, speed=speed,
+                                   model="kokoro-82m-onnx-v1.0", language=voice_language,
+                                   track_synthesizer=lambda track, text, path: synthesize_kokoro(
+                                       engine, text, path, track.voice, speed, VOICE_LANGUAGES[track.language], **audio_settings),
+                                   audio_settings=audio_settings,
+                                   metadata={"engine": "ollama" if use_ai else "manual", "model": ollama_model if use_ai else None},
+                                   source_hash=source_hash,
+                                   progress=lambda n, total: bar.progress(n / total, text=f"Áudio: trecho {n} de {total}"))
+            st.session_state[package_prefix + "package"] = str(folder)
+            st.session_state[package_prefix + "package_settings"] = settings_key
+        except Exception as exc:
+            logging.getLogger("ciencia_voz").exception("Falha na geração de arquivos MP3")
+            st.error(friendly_error(exc))
+            with st.expander("Detalhes do erro de geração"):
+                st.code(f"{type(exc).__name__}: {exc}", language="text")
+        finally:
+            bar.empty()
+
+    package = st.session_state.get(package_prefix + "package")
+    if package:
+        folder = Path(package)
+        if st.session_state.get(package_prefix + "package_settings") != settings_key:
+            st.warning("Os arquivos abaixo pertencem à geração anterior. Gere novamente para incorporar as alterações.")
+        st.success("Arquivos prontos para ouvir e baixar.")
+        st.caption(f"Pasta no computador que executa o aplicativo: {folder}")
+        st.download_button("Baixar pacote completo (.zip)", zip_package(folder),
+                           "ciencia-em-voz.zip", mime="application/zip", type="primary")
+        manifest = json.loads((folder / "manifesto.json").read_text(encoding="utf-8"))
+        for entry in manifest["tracks"]:
+            st.markdown(f'**{entry["title"]}**')
+            audio = (folder / entry["mp3"]).read_bytes()
+            st.audio(audio, format="audio/mpeg")
+            st.download_button("Baixar MP3", audio, entry["mp3"], mime="audio/mpeg", key=entry["mp3"])
+
+
 st.title("Ciência em Voz")
 st.markdown("Transforme os capítulos que importam em uma biblioteca de áudio.")
-st.caption("1. Envie o PDF  ·  2. Escolha o conteúdo  ·  3. Revise a narração  ·  4. Baixe os MP3")
+st.caption("Escolha um PDF ou reutilize textos prontos para montar sua biblioteca de áudio.")
+
+input_mode = st.radio("Origem do conteúdo", ["PDF", "Textos e arquivos TXT"], horizontal=True)
+returning_to_pdf = input_mode == "PDF" and st.session_state.get("previous_input_mode") == "Textos e arquivos TXT"
+st.session_state["previous_input_mode"] = input_mode
+if input_mode == "Textos e arquivos TXT":
+    st.subheader("1 · Adicione seus textos")
+    st.caption("Recupere transcrições salvas ou cole um texto pronto. Cada texto será um arquivo MP3.")
+    items = st.session_state.setdefault("text_items", [])
+    with st.expander("Colar um texto", expanded=True):
+        with st.form("paste-text", clear_on_submit=True):
+            title = st.text_input("Título do áudio")
+            pasted = st.text_area("Cole o texto", height=180,
+                                  placeholder="Cole aqui a transcrição que deseja ouvir…")
+            if st.form_submit_button("Adicionar texto", type="primary"):
+                if not title.strip() or not pasted.strip():
+                    st.error("Informe um título e um texto antes de adicionar.")
+                else:
+                    items.append({"id": uuid.uuid4().hex, "title": title.strip(),
+                                  "text": pasted.strip(), "selected": True})
+                    st.success("Texto adicionado à lista de narração.")
+    with st.expander("Importar arquivos TXT", expanded=True):
+        uploads = st.file_uploader("Selecione um ou mais arquivos TXT", type=["txt"], accept_multiple_files=True,
+                                   key="text-imports", help="Até 5 MB por arquivo. UTF-8, UTF-16 com BOM ou Windows-1252.")
+        if st.button("Adicionar arquivos TXT", disabled=not uploads):
+            try:
+                imported = [{"id": uuid.uuid4().hex, "title": Path(f.name).stem,
+                             "text": decode_txt(f.getvalue()), "selected": True} for f in uploads]
+                items.extend(imported)
+                st.success(f"{len(imported)} texto(s) importado(s). Confira os títulos e o conteúdo abaixo.")
+            except ValueError as exc:
+                st.error(str(exc))
+    if not items:
+        st.info("Cole um texto ou importe suas transcrições TXT para começar.")
+        st.stop()
+    st.subheader("2 · Selecione e revise os textos")
+    mark, unmark = st.columns(2)
+    action = True if mark.button("Marcar todos", key="texts-mark") else None
+    if unmark.button("Desmarcar todos", key="texts-unmark"):
+        action = False
+    if action is not None:
+        for item in items:
+            item["selected"] = action
+            st.session_state["text-selected-" + item["id"]] = action
+    tracks = []
+    for item in list(items):
+        item_key = item["id"]
+        with st.container(border=True):
+            selected = st.checkbox("Incluir no áudio", value=item["selected"], key="text-selected-" + item_key)
+            item["selected"] = selected
+            with st.expander(item["title"], expanded=selected):
+                item["title"] = st.text_input("Título", item["title"], key="text-title-" + item_key)
+                track_language, track_voice = render_track_voice("text-" + item_key)
+                edit_key = "text-content-" + item_key
+                if st.button("Aplicar pronúncias do glossário", key="text-glossary-" + item_key):
+                    try:
+                        st.session_state[edit_key] = apply_glossary(st.session_state.get(edit_key, item["text"]),
+                                                                  parse_glossary(glossary_raw))
+                    except ValueError as exc:
+                        st.error(str(exc))
+                item["text"] = st.text_area("Texto que será narrado", item["text"], height=230, key=edit_key)
+                st.download_button("Baixar transcrição", item["text"].encode("utf-8"),
+                                   f"transcricao-{item_key[:8]}.txt", mime="text/plain", key="text-download-" + item_key)
+                if st.button("Remover texto", key="text-remove-" + item_key):
+                    items.remove(item)
+                    st.rerun()
+            if selected:
+                tracks.append(Track(item["title"], item["text"], None, None, track_language, track_voice))
+    st.caption(f"{len(tracks)} de {len(items)} texto(s) selecionado(s).")
+    if not tracks:
+        st.info("Selecione ao menos um texto para gerar áudio.")
+        st.stop()
+    if any(not t.title.strip() or not t.text.strip() for t in tracks):
+        st.warning("Todas as seleções precisam de título e texto.")
+    text_key = signature([[t.title, t.text] for t in tracks])
+    render_audio_export(tracks, "text-" + text_key, source_hash=hashlib.sha256(
+                        json.dumps([[t.title, t.text] for t in tracks], ensure_ascii=False).encode()).hexdigest(),
+                        package_prefix="text_", stage=3)
+    st.stop()
 
 st.subheader("1 · Seu documento")
 upload = st.file_uploader("Envie um artigo, livro ou tese", type=["pdf"],
@@ -109,8 +331,13 @@ if not data:
     st.info("Envie um PDF para identificar capítulos, seções e subseções, ou abra o exemplo.")
     st.stop()
 
-password = st.text_input("Senha do PDF, se necessário", type="password")
-mode_label = st.radio("Como identificar a estrutura", ["Automático (sumário e títulos)", "Apenas títulos", "Por páginas"], horizontal=True)
+st.caption(f"Documento em uso: {name}")
+password = st.text_input("Senha do PDF, se necessário", value=st.session_state.get("pdf_password", ""), type="password")
+st.session_state["pdf_password"] = password
+structure_options = ["Automático (sumário e títulos)", "Apenas títulos", "Por páginas"]
+mode_label = st.radio("Como identificar a estrutura", structure_options,
+                      index=structure_options.index(st.session_state.get("pdf_structure_mode", structure_options[0])), horizontal=True)
+st.session_state["pdf_structure_mode"] = mode_label
 mode = {"Automático (sumário e títulos)": "auto", "Apenas títulos": "headings", "Por páginas": "pages"}[mode_label]
 document_key = signature([hashlib.sha256(data).hexdigest(), password, mode])
 if st.session_state.get("document_key") != document_key:
@@ -169,14 +396,36 @@ with st.expander("Adicionar uma seleção manual por páginas"):
 
 sections = doc.sections + st.session_state.get("manual", [])
 tree_key = signature([document_key, [(s.id, s.title, s.start, s.end) for s in sections]])
+mark, unmark, counter = st.columns([1, 1, 2])
+selection_default_key = "selection-default-" + tree_key
+selection_version_key = "selection-version-" + tree_key
+selection_mask_key = "selection-mask-" + tree_key
+selection_saved_key = "selection-saved-" + tree_key
+if returning_to_pdf:
+    st.session_state[selection_mask_key] = st.session_state.get(selection_saved_key, [])
+    st.session_state[selection_version_key] = st.session_state.get(selection_version_key, 0) + 1
+if mark.button("Marcar todos", key="pdf-mark"):
+    st.session_state[selection_default_key] = True
+    st.session_state.pop(selection_mask_key, None)
+    st.session_state[selection_version_key] = st.session_state.get(selection_version_key, 0) + 1
+if unmark.button("Desmarcar todos", key="pdf-unmark"):
+    st.session_state[selection_default_key] = False
+    st.session_state.pop(selection_mask_key, None)
+    st.session_state[selection_version_key] = st.session_state.get(selection_version_key, 0) + 1
+counter.caption(f"{len(sections)} capítulos, seções e seleções disponíveis")
+selection_version = st.session_state.get(selection_version_key, 0)
+editor_key = "tree-" + tree_key + (f"-{selection_version}" if selection_version else "")
 rows = []
 for section in sections:
     first, last = doc.page_range(section)
-    rows.append({"Ouvir": False, "Conteúdo": "　" * (section.level - 1) + section.title,
+    mask = st.session_state.get(selection_mask_key)
+    included = section.id in mask if mask is not None else st.session_state.get(selection_default_key, False)
+    rows.append({"Ouvir": included, "Conteúdo": "　" * (section.level - 1) + section.title,
                  "Nível": section.level, "Páginas": f"{first}–{last}", "Origem": section.source})
-edited = st.data_editor(rows, key="tree-" + tree_key, hide_index=True, width="stretch",
+edited = st.data_editor(rows, key=editor_key, hide_index=True, width="stretch",
                         disabled=["Conteúdo", "Nível", "Páginas", "Origem"],
                         column_config={"Ouvir": st.column_config.CheckboxColumn("Ouvir", width="small")})
+st.session_state[selection_saved_key] = [s.id for s, row in zip(sections, edited) if row["Ouvir"]]
 try:
     selected, skipped = deduplicate([s for s, row in zip(sections, edited) if row["Ouvir"]])
 except ValueError as exc:
@@ -197,7 +446,10 @@ if not selected:
     st.stop()
 
 st.subheader("3 · Prepare e revise a narração")
-prep_mode = st.radio("Preparação", ["Leitura científica com Ollama", "Texto local, com revisão manual"], horizontal=True)
+preparation_options = ["Leitura científica com Ollama", "Texto local, com revisão manual"]
+prep_mode = st.radio("Preparação", preparation_options,
+                     index=preparation_options.index(st.session_state.get("pdf_preparation_mode", preparation_options[0])), horizontal=True)
+st.session_state["pdf_preparation_mode"] = prep_mode
 use_ai = prep_mode.startswith("Leitura")
 try:
     glossary = parse_glossary(glossary_raw)
@@ -251,58 +503,24 @@ revision = st.session_state.get("edit_revision", 0)
 for i, prepared in enumerate(st.session_state["prepared"]):
     with st.expander(f'{i + 1:02d} · {prepared["title"]}', expanded=True):
         st.caption(f'Páginas {prepared["first_page"]}–{prepared["last_page"]}')
+        narration_key = f"narration-{prep_key}-{revision}-{i}"
+        track_language, track_voice = render_track_voice(narration_key)
+        with st.expander("Importar uma transcrição TXT para esta seleção"):
+            transcript_file = st.file_uploader("Arquivo TXT da seleção", type=["txt"], key="import-" + narration_key,
+                                               help="Substitui o texto desta seleção somente ao clicar no botão. Até 5 MB.")
+            if st.button("Usar TXT nesta seleção", key="apply-" + narration_key, disabled=transcript_file is None):
+                try:
+                    st.session_state[narration_key] = decode_txt(transcript_file.getvalue())
+                    st.success("Transcrição importada. Revise o texto abaixo.")
+                except ValueError as exc:
+                    st.error(str(exc))
         text = st.text_area("Texto que será narrado", prepared["text"], height=230,
-                            key=f"narration-{prep_key}-{revision}-{i}")
-        tracks.append(Track(prepared["title"], text, prepared["first_page"], prepared["last_page"]))
+                            key=narration_key, help="Edite ou cole uma transcrição pronta aqui.")
+        prepared["text"] = text
+        tracks.append(Track(prepared["title"], text, prepared["first_page"], prepared["last_page"],
+                            track_language, track_voice))
         st.download_button("Baixar transcrição", text.encode("utf-8"), f"transcricao-{i + 1:03d}.txt",
                            mime="text/plain", key=f"txt-{i}")
 
-chars = sum(len(t.text) for t in tracks)
-minutes = round(sum(len(t.text.split()) for t in tracks) / (140 * speed))
-requests = sum(len(chunk_text(t.text, limit=700)) for t in tracks)
-st.caption(f"{chars:,} caracteres · {requests} trecho(s) de voz local · duração aproximada: {max(1, minutes)} min.")
-review_key = signature([prep_key, [t.text for t in tracks]])
-reviewed = st.checkbox("Revisei o texto, as fórmulas e as pronúncias", key="review-" + review_key)
-
-st.subheader("4 · Gere e baixe seus áudios")
-st.caption("Voz gerada por inteligência artificial. Os MP3 e as transcrições serão salvos em uma pasta própria para esta geração.")
-if not ready_voice:
-    st.info("Baixe os arquivos de voz Kokoro na barra lateral para gerar MP3 sem serviços pagos.")
-if st.button("Gerar arquivos MP3", type="primary", disabled=not (reviewed and ready_voice)):
-    bar = st.progress(0, text="Gerando áudio…")
-    try:
-        root = Path(os.getenv("AUDIO_OUTPUT_DIR", "audios"))
-        if not root.is_absolute():
-            root = BASE / root
-        engine = kokoro_engine(str(models_dir.resolve()))
-        folder = export_tracks(None, tracks, root, voice=voice, speed=speed,
-                               model="kokoro-82m-onnx-v1.0", language=voice_language,
-                               synthesizer=lambda text, path: synthesize_kokoro(engine, text, path, voice, speed, voice_lang),
-                               metadata={"engine": "ollama" if use_ai else "manual", "model": ollama_model if use_ai else None},
-                               source_hash=hashlib.sha256(data).hexdigest(),
-                               progress=lambda n, total: bar.progress(n / total, text=f"Áudio: trecho {n} de {total}"))
-        st.session_state["package"] = str(folder)
-        st.session_state["package_settings"] = signature([review_key, voice, speed, voice_language])
-    except Exception as exc:
-        logging.getLogger("ciencia_voz").exception("Falha na geração de arquivos MP3")
-        st.error(friendly_error(exc))
-        with st.expander("Detalhes do erro de geração"):
-            st.code(f"{type(exc).__name__}: {exc}", language="text")
-    finally:
-        bar.empty()
-
-package = st.session_state.get("package")
-if package:
-    folder = Path(package)
-    if st.session_state.get("package_settings") != signature([review_key, voice, speed, voice_language]):
-        st.warning("Os arquivos abaixo pertencem à geração anterior. Gere novamente para incorporar as alterações.")
-    st.success("Arquivos prontos para ouvir e baixar.")
-    st.caption(f"Pasta no computador que executa o aplicativo: {folder}")
-    st.download_button("Baixar pacote completo (.zip)", zip_package(folder),
-                       "ciencia-em-voz.zip", mime="application/zip", type="primary")
-    manifest = json.loads((folder / "manifesto.json").read_text(encoding="utf-8"))
-    for entry in manifest["tracks"]:
-        st.markdown(f'**{entry["title"]}**')
-        audio = (folder / entry["mp3"]).read_bytes()
-        st.audio(audio, format="audio/mpeg")
-        st.download_button("Baixar MP3", audio, entry["mp3"], mime="audio/mpeg", key=entry["mp3"])
+render_audio_export(tracks, signature([prep_key, [t.text for t in tracks]]),
+                    use_ai=use_ai, source_hash=hashlib.sha256(data).hexdigest())

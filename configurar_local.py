@@ -24,4 +24,4 @@ if args.verificar_ollama:
     configured = os.getenv("OLLAMA_MODEL", "qwen3:8b")
     print(f"Modelo configurado: {configured}")
     if configured not in models:
-        print(f"Ainda não instalado. Execute no container: ollama pull {configured}")
+        print(f"Ainda não instalado. Execute: ollama pull {configured}")

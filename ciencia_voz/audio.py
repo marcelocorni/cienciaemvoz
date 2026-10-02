@@ -25,8 +25,10 @@ from .science import chunk_text
 class Track:
     title: str
     text: str
-    first_page: int
-    last_page: int
+    first_page: int | None
+    last_page: int | None
+    language: str | None = None
+    voice: str | None = None
 
 
 def slug(title: str) -> str:
@@ -59,7 +61,8 @@ def export_tracks(client: OpenAI, tracks: list[Track], output_root: Path, *,
                   voice: str = "coral", speed: float = 1.0,
                   model: str = "gpt-4o-mini-tts", language: str = "Português brasileiro",
                   source_hash: str = "", progress: Callable[[int, int], None] = lambda *_: None,
-                  synthesizer=None, metadata: dict | None = None) -> Path:
+                  synthesizer=None, track_synthesizer=None, metadata: dict | None = None,
+                  audio_settings: dict | None = None) -> Path:
     if not tracks or any(not track.text.strip() for track in tracks):
         raise ValueError("Todas as seleções devem ter texto de narração.")
     if any("[" in t.text and re.search(r"\[(?:CONFERIR|ileg[ií]vel|P[aá]gina sem|s[ií]mbolo ileg)", t.text, re.I)
@@ -74,7 +77,8 @@ def export_tracks(client: OpenAI, tracks: list[Track], output_root: Path, *,
     folder = Path(staging.name)
     completed = None
     created_output = False
-    jobs = [(track, chunk_text(track.text, limit=700 if synthesizer else 2800)) for track in tracks]
+    local = synthesizer is not None or track_synthesizer is not None
+    jobs = [(track, chunk_text(track.text, limit=700 if local else 2800)) for track in tracks]
     total = sum(len(chunks) for _, chunks in jobs)
     done, entries = 0, []
     try:
@@ -84,13 +88,15 @@ def export_tracks(client: OpenAI, tracks: list[Track], output_root: Path, *,
                 parts = []
                 for part_number, chunk in enumerate(chunks):
                     part = Path(temp) / f"part-{part_number:05d}.mp3"
-                    if synthesizer:
+                    if track_synthesizer:
+                        track_synthesizer(track, chunk, part)
+                    elif synthesizer:
                         synthesizer(chunk, part)
                     else:
-                        args = dict(model=model, voice=voice, input=chunk, response_format="mp3", speed=speed)
+                        args = dict(model=model, voice=track.voice or voice, input=chunk, response_format="mp3", speed=speed)
                         if model.startswith("gpt-4o-mini-tts"):
                             args["instructions"] = (
-                                f"Narre com clareza acadêmica. Idioma/convenção de fala: {language}. "
+                                f"Narre com clareza acadêmica. Idioma/convenção de fala: {track.language or language}. "
                                 "Preserve o texto e o idioma original. Articule termos científicos, "
                                 "números e siglas. Faça pausas naturais entre fórmulas e parágrafos. "
                                 "Não resuma nem acrescente palavras."
@@ -105,19 +111,20 @@ def export_tracks(client: OpenAI, tracks: list[Track], output_root: Path, *,
                 mp3 = folder / f"{basename}.mp3"
                 join_mp3(parts, mp3)
             (folder / f"{basename}.txt").write_text(track.text, encoding="utf-8")
-            entries.append({**asdict(track), "text": None, "mp3": mp3.name,
+            entries.append({**asdict(track), "language": track.language or language,
+                            "voice": track.voice or voice, "text": None, "mp3": mp3.name,
                             "transcript": f"{basename}.txt",
                             "text_sha256": hashlib.sha256(track.text.encode()).hexdigest(),
                             "chunks": len(chunks)})
         manifest = {"created_utc": datetime.now(timezone.utc).isoformat(),
                     "source_sha256": source_hash, "voice": voice, "speed": speed,
                     "tts_model": model, "language": language,
-                    "ai_generated_voice": True, "tracks": entries,
-                    "backend": "local" if synthesizer else "openai", "preparation": metadata or {}}
+                    "ai_generated_voice": True, "tracks": entries, "audio_settings": audio_settings or {},
+                    "backend": "local" if local else "openai", "preparation": metadata or {}}
         (folder / "manifesto.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         (folder / "LEIA-ME.txt").write_text(
             "Voz gerada por inteligência artificial.\nConfira as transcrições, especialmente fórmulas.\n"
-            "As páginas indicadas são as páginas físicas do PDF.\n", encoding="utf-8")
+            "As páginas indicadas são as páginas físicas do PDF; textos avulsos não têm páginas associadas.\n", encoding="utf-8")
         # Publish only after every track is ready. Copying closed files avoids
         # renaming a directory watched by Streamlit; manifest is the commit marker.
         completed = root / run_id

@@ -1,0 +1,34 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+<div id="@ViewerId" class="pdf-reader">
+    <div class="pdf-toolbar" aria-label="Navegação do PDF">
+        <button data-previous disabled aria-label="Página anterior">←</button>
+        <label>Página <input data-page type="number" min="1" value="1" disabled aria-label="Número da página" /></label>
+        <span data-pages>de —</span>
+        <button data-next disabled aria-label="Próxima página">→</button>
+        <label class="zoom-label">Zoom <select data-zoom aria-label="Zoom do PDF"><option value="fit">Ajustar largura</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
+    </div>
+    <div class="pdf-canvas-wrap"><canvas aria-label="Página do documento PDF" role="img"></canvas></div>
+    <p class="pdf-render-status" data-pdf-status role="status">Carregando documento…</p>
+</div>
+@code {
+    [Parameter, EditorRequired] public string Url { get; set; } = "";
+    private readonly string ViewerId = "pdf-" + Guid.NewGuid().ToString("N");
+    private IJSObjectReference? Module;
+    private IJSObjectReference? Viewer;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        Module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/pdf-viewer.js");
+        Viewer = await Module.InvokeAsync<IJSObjectReference>("createViewer", ViewerId, Url);
+    }
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (Viewer is not null) { await Viewer.InvokeVoidAsync("dispose"); await Viewer.DisposeAsync(); }
+            if (Module is not null) await Module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

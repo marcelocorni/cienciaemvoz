@@ -17,13 +17,19 @@ def client_for(key: str) -> OpenAI:
 
 def parse_glossary(raw: str) -> dict[str, str]:
     result = {}
-    for line in raw.splitlines():
-        if not line.strip():
+    spellings = {}
+    for number, line in enumerate(raw.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
         term, sep, pronunciation = line.partition("=")
         if not sep or not term.strip() or not pronunciation.strip():
-            raise ValueError("Use uma entrada por linha: termo = pronúncia.")
-        result[term.strip()] = pronunciation.strip()
+            raise ValueError(f"Linha {number}: use uma entrada por linha: termo = pronúncia.")
+        term = term.strip()
+        previous = spellings.get(term.casefold())
+        if previous is not None:
+            del result[previous]
+        spellings[term.casefold()] = term
+        result[term] = pronunciation.strip()
     return result
 
 

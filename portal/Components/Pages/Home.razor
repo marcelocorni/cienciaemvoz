@@ -1,0 +1,31 @@
+@page "/"
+@inject LibraryCatalog Catalog
+<PageTitle>Ciência em Voz · Leia e ouça</PageTitle>
+<header class="page-header"><span class="eyebrow">CONHECIMENTO EM OUTRA FREQUÊNCIA</span><span class="pill">Leitura + áudio</span></header>
+<section class="hero">
+    <div class="hero-copy">
+        <span class="eyebrow">BEM-VINDO AO CIÊNCIA EM VOZ</span>
+        <h1>A ciência tem<br />muito a dizer.<br /><em>Agora, você pode ouvir.</em></h1>
+        <p>Um espaço para acompanhar textos científicos no seu ritmo. Leia o documento original e ouça a narração, capítulo por capítulo, em uma mesma experiência.</p>
+        <a class="button primary" href="@($"/leitura/{Catalog.GetDocuments()[0].Id}")">Explorar a biblioteca <span aria-hidden="true">↗</span></a>
+    </div>
+    <div class="hero-art" aria-hidden="true">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <div class="paper-art"><span class="paper-label">CIÊNCIA EM VOZ</span><strong>Do texto<br />à escuta.</strong><div class="paper-lines"><i></i><i></i><i></i></div><span class="paper-formula">E = mc²</span></div>
+        <div class="wave-card"><span class="wave-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span>Uma nova forma de acompanhar ideias.</span></div>
+        <span class="art-caption">LER. OUVIR. COMPREENDER.</span>
+    </div>
+</section>
+<section class="feature-grid" aria-label="Como funciona">
+    <article><span class="feature-number">01 / LEITURA</span><h2>O original, sempre perto.</h2><p>Consulte o PDF enquanto escuta. Releia uma definição, acompanhe uma fórmula e explore o texto com calma.</p></article>
+    <article><span class="feature-number">02 / ESCUTA</span><h2>Capítulos em sequência.</h2><p>Dê Play uma vez. Ao terminar um áudio, o próximo começa automaticamente. Pause e retome de onde parou.</p></article>
+    <article><span class="feature-number">03 / SEU RITMO</span><h2>Você escolhe a velocidade.</h2><p>Ajuste a reprodução e escolha a seção que deseja ouvir. A leitura acompanha o seu tempo.</p></article>
+</section>
+<section class="project-card">
+    <div><span class="eyebrow">O PROJETO POR TRÁS DA VOZ</span><h2>Ciência em Voz, da transcrição à escuta.</h2><p>As narrações são preparadas com o Ciência em Voz, aplicativo que transforma textos científicos em áudio, com revisão de fórmulas, termos e pronúncias. Este portal reúne os documentos e os MP3 para uma leitura acompanhada.</p><small>A voz é gerada por inteligência artificial. Consulte o documento original para conferir o conteúdo científico.</small></div>
+    @if (Catalog.GithubUrl is { } github)
+    { <a class="button secondary" href="@github" target="_blank" rel="noopener noreferrer">Conhecer no GitHub ↗</a> }
+    else
+    { <div class="github-placeholder"><strong>Repositório no GitHub</strong><span>O link do projeto será disponibilizado aqui.</span></div> }
+</section>
+<footer class="page-footer">Ciência em Voz <span>Mais caminhos para o conhecimento.</span></footer>

@@ -1,0 +1,54 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+<section class="audio-panel" id="@PlayerId" aria-label="Reprodutor de áudio">
+    <div class="panel-heading"><span>◖◗ &nbsp; Acompanhe em áudio</span><span class="sequence-badge">Sequencial</span></div>
+    <div class="player-console">
+        <span class="eyebrow">AGORA NA SUA ESCUTA</span>
+        <h2 data-current-title>@(Document.Tracks.FirstOrDefault()?.Title ?? "Nenhum áudio disponível")</h2>
+        <p class="track-position" data-position>@(Document.Tracks.Count > 0 ? $"Áudio 1 de {Document.Tracks.Count}" : "A narração será disponibilizada em breve.")</p>
+        <audio preload="metadata" aria-label="Narração científica"></audio>
+        <label class="sr-only" for="@(PlayerId + "-seek")">Posição no áudio</label>
+        <input class="seek" id="@(PlayerId + "-seek")" data-seek type="range" min="0" max="100" step="0.1" value="0" disabled />
+        <div class="time-row"><span data-elapsed>0:00</span><span data-duration>0:00</span></div>
+        <div class="transport">
+            <button data-play class="play-button" disabled="@(Document.Tracks.Count == 0)" aria-label="Reproduzir áudio">▶ <span>Play</span></button>
+            <button data-pause class="control-button" disabled aria-label="Pausar áudio">Ⅱ <span>Pause</span></button>
+            <button data-stop class="control-button" disabled="@(Document.Tracks.Count == 0)" aria-label="Parar e voltar ao primeiro áudio">■ <span>Stop</span></button>
+        </div>
+        <label class="speed-label">Velocidade de reprodução<select data-speed aria-label="Velocidade de reprodução">
+            <option value="0.75">0,75×</option><option value="1" selected>1× · Normal</option><option value="1.25">1,25×</option><option value="1.5">1,5×</option><option value="1.75">1,75×</option><option value="2">2×</option>
+        </select></label>
+        <p class="player-status" data-status role="status" aria-live="polite">@(Document.Tracks.Count > 0 ? "Pronto para ouvir." : "Aguardando os áudios.")</p>
+    </div>
+    <div class="playlist-heading"><h3>Seções da leitura</h3><span>@Document.Tracks.Count</span></div>
+    <ol class="playlist" aria-label="Áudios na ordem de reprodução">
+        @for (var i = 0; i < Document.Tracks.Count; i++)
+        {
+            var index = i;
+            <li><button data-track="@index" title="@Document.Tracks[i].Title"><span class="track-number">@((i + 1).ToString("D2"))</span><span class="track-name">@Document.Tracks[i].Title</span><span class="track-indicator" aria-hidden="true">▷</span></button></li>
+        }
+    </ol>
+    <p class="player-note">O próximo áudio começa automaticamente.<br />Stop volta ao início da sequência.</p>
+</section>
+@code {
+    [Parameter, EditorRequired] public LibraryDocument Document { get; set; } = default!;
+    private readonly string PlayerId = "player-" + Guid.NewGuid().ToString("N");
+    private IJSObjectReference? Module;
+    private IJSObjectReference? Player;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        Module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/audio-player.js");
+        Player = await Module.InvokeAsync<IJSObjectReference>("createPlayer", PlayerId,
+            Document.Tracks.Select(t => new { title = t.Title, url = t.Url }).ToArray());
+    }
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (Player is not null) { await Player.InvokeVoidAsync("dispose"); await Player.DisposeAsync(); }
+            if (Module is not null) await Module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

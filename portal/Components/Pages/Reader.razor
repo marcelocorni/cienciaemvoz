@@ -1,0 +1,31 @@
+@page "/leitura/{Id}"
+@inject LibraryCatalog Catalog
+<PageTitle>@(Document?.Title ?? "Leitura") · Ciência em Voz</PageTitle>
+@if (Document is null)
+{
+    <section class="empty-state"><h1>Documento não encontrado</h1><p>Escolha uma leitura disponível na biblioteca.</p><a class="button primary" href="/">Voltar à Home</a></section>
+}
+else
+{
+    <header class="reader-header"><div><span class="eyebrow">BIBLIOTECA / LEITURA ACOMPANHADA</span><h1>@Document.Title</h1><p>@Document.Description</p></div><span class="pill">@Document.Tracks.Count áudios</span></header>
+    <div class="reader-layout">
+        <section class="pdf-panel" aria-label="Documento original">
+            <div class="panel-heading"><span>▤ &nbsp; Documento original</span>
+                @if (Document.PdfPath is not null) { <a href="@Document.PdfUrl" target="_blank" rel="noopener">Abrir PDF ↗</a> }
+            </div>
+            @if (Document.PdfPath is not null)
+            {
+                <PdfViewer @key="Document.Id" Url="@Document.PdfUrl" />
+                <p class="pdf-help">Se o PDF não aparecer no seu navegador, use <a href="@Document.PdfUrl" target="_blank" rel="noopener">Abrir PDF</a>.</p>
+            }
+            else
+            { <div class="pdf-empty"><span aria-hidden="true">▤</span><h2>Sua próxima leitura está chegando.</h2><p>O PDF será exibido aqui quando estiver disponível.</p></div> }
+        </section>
+        <AudioPlayer @key="Document.Id" Document="Document" />
+    </div>
+}
+@code {
+    [Parameter] public string Id { get; set; } = "";
+    private LibraryDocument? Document;
+    protected override void OnParametersSet() => Document = Catalog.Find(Id);
+}

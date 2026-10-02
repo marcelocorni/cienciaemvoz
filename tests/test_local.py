@@ -113,8 +113,62 @@ def test_export_local_never_calls_paid_client(tmp_path):
         path.write_bytes(b"fake-mp3" * 100)
     folder = export_tracks(None, [Track("Local", "Energia em joules.", 1, 1)], tmp_path,
                            model="kokoro", voice="pf_dora", synthesizer=synth,
-                           metadata={"engine": "ollama", "model": "qwen3:8b"})
+                           metadata={"engine": "ollama", "model": "qwen3:8b"},
+                           audio_settings={"pitch": -2, "volume_db": -3})
     assert calls == ["Energia em joules."]
     manifest = json.loads((folder / "manifesto.json").read_text(encoding="utf-8"))
+    assert manifest["audio_settings"] == {"pitch": -2, "volume_db": -3}
     assert manifest["backend"] == "local"
     assert manifest["preparation"]["model"] == "qwen3:8b"
+
+
+@pytest.mark.parametrize("pitch,volume_db,fallback", [(3, 0, False), (-3, -6, False), (3, -6, True)])
+def test_audio_controls_change_frequency_and_gain_without_changing_duration(tmp_path, monkeypatch, pitch, volume_db, fallback):
+    import subprocess
+    import imageio_ffmpeg
+    rate = 24000
+    signal = (0.15 * np.sin(2 * np.pi * 440 * np.arange(rate * 3) / rate)).astype(np.float32)
+    received = {}
+    def create(*args, **kwargs):
+        received.update(kwargs)
+        return signal, rate
+    if fallback:
+        monkeypatch.setattr("ciencia_voz.local.ffmpeg_has_rubberband", lambda _: False)
+    path = tmp_path / "shifted.mp3"
+    synthesize_kokoro(SimpleNamespace(create=create), "Texto.", path, "pf_dora", 1, "pt-br",
+                      pitch=pitch, volume_db=volume_db, sentence_pause=0.5, clause_pause=0.2)
+    decoded = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-i", str(path),
+                              "-f", "f32le", "-ac", "1", "-ar", str(rate), "pipe:1"],
+                             capture_output=True, check=True)
+    audio = np.frombuffer(decoded.stdout, dtype=np.float32)
+    assert abs(len(audio) / rate - 3) < 0.15
+    central = audio[rate // 2: -rate // 2]
+    spectrum = np.abs(np.fft.rfft(central * np.hanning(len(central))))
+    frequency = np.fft.rfftfreq(len(central), 1 / rate)[np.argmax(spectrum)]
+    assert frequency == pytest.approx(440 * 2 ** (pitch / 12), rel=0.015)
+    rms = np.sqrt(np.mean(central ** 2))
+    assert rms == pytest.approx(0.15 / np.sqrt(2) * 10 ** (volume_db / 20), rel=0.15)
+    assert received["sentence_pause"] == 0.5 and received["clause_pause"] == 0.2
+    assert not path.with_suffix(".wav").exists()
+
+
+def test_positive_volume_limits_peaks(tmp_path):
+    import subprocess
+    import imageio_ffmpeg
+    rate = 24000
+    signal = (0.8 * np.sin(2 * np.pi * 440 * np.arange(rate * 2) / rate)).astype(np.float32)
+    path = tmp_path / "loud.mp3"
+    synthesize_kokoro(SimpleNamespace(create=lambda *a, **k: (signal, rate)), "Texto", path,
+                      "pf_dora", 1, "pt-br", volume_db=6)
+    run = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-i", str(path),
+                          "-f", "f32le", "-ac", "1", "pipe:1"], capture_output=True, check=True)
+    assert np.max(np.abs(np.frombuffer(run.stdout, dtype=np.float32))) <= 1.0
+
+
+@pytest.mark.parametrize("settings", [{"pitch": float("nan")}, {"pitch": 7}, {"sentence_pause": -1}])
+def test_invalid_voice_controls_do_not_start_synthesis(tmp_path, settings):
+    def fail(*args, **kwargs):
+        pytest.fail("A síntese não deveria começar com ajustes inválidos")
+    with pytest.raises(ValueError, match="inválido"):
+        synthesize_kokoro(SimpleNamespace(create=fail), "Texto", tmp_path / "audio.mp3",
+                          "pf_dora", 1, "pt-br", **settings)

@@ -1,0 +1,31 @@
+@inherits LayoutComponentBase
+@inject LibraryCatalog Catalog
+@inject NavigationManager Navigation
+<div class="portal-shell">
+    <aside class="sidebar">
+        <a class="brand" href="/" aria-label="Ciência em Voz — início">
+            <span class="brand-symbol" aria-hidden="true">◖≋◗</span>
+            <span>Ciência em Voz<small>PORTAL DE LEITURA</small></span>
+        </a>
+        <nav aria-label="Navegação principal">
+            <NavLink href="/" Match="NavLinkMatch.All" class="nav-link"><span aria-hidden="true">⌂</span> Home</NavLink>
+            <div class="nav-heading">SUA BIBLIOTECA</div>
+            @foreach (var doc in Catalog.GetDocuments())
+            {
+                <NavLink href="@($"/leitura/{doc.Id}")" class="nav-link document-link">
+                    <span aria-hidden="true">▤</span><span>@doc.Title</span>
+                </NavLink>
+            }
+        </nav>
+        <div class="sidebar-bottom">
+            <span class="small-wave" aria-hidden="true">▂ ▅ ▃ ▇ ▄ ▆ ▂</span>
+            <p>Ciência para ler.<br />Conhecimento para ouvir.</p>
+            <button class="text-button" @onclick="Refresh">Atualizar biblioteca ↻</button>
+        </div>
+    </aside>
+    <main class="main-content" id="conteudo">@Body</main>
+</div>
+<div id="blazor-error-ui" data-nosnippet>A conexão com o portal foi interrompida. <a href="" class="reload">Recarregar página</a></div>
+@code {
+    private void Refresh() => Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+}

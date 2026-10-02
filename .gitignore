@@ -5,3 +5,10 @@ __pycache__/
 audios/
 models/
 .streamlit/secrets.toml
+**/bin/
+**/obj/
+**/TestResults/
+portal/transcricoes/pdf/*
+!portal/transcricoes/pdf/.gitkeep
+portal/transcricoes/audio/*
+!portal/transcricoes/audio/.gitkeep

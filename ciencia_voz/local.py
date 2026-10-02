@@ -194,18 +194,54 @@ def kokoro_engine(folder: str):
 _voice_lock = threading.Lock()
 
 
-def synthesize_kokoro(engine, text: str, path: Path, voice: str, speed: float, language: str) -> None:
+@lru_cache(maxsize=4)
+def ffmpeg_has_rubberband(executable: str) -> bool:
+    result = subprocess.run([executable, "-hide_banner", "-filters"], capture_output=True,
+                            timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return result.returncode == 0 and b"rubberband" in result.stdout
+
+
+def synthesize_kokoro(engine, text: str, path: Path, voice: str, speed: float, language: str, *,
+                      pitch: float = 0.0, volume_db: float = 0.0,
+                      sentence_pause: float = 0.25, clause_pause: float = 0.1) -> None:
     import soundfile as sf
     import imageio_ffmpeg
+    controls = [(pitch, -6, 6, "altura da voz"), (volume_db, -12, 6, "volume"),
+                (sentence_pause, 0, 2, "pausa entre frases"), (clause_pause, 0, 1, "pausa entre orações")]
+    for value, minimum, maximum, label in controls:
+        if not np.isfinite(value) or not minimum <= value <= maximum:
+            raise ValueError(f"Valor inválido para {label}: deve estar entre {minimum} e {maximum}.")
     # eSpeak uses global native state; serialize phonemization/inference per process.
     with _voice_lock:
-        samples, rate = engine.create(text, voice=voice, speed=speed, lang=language)
+        samples, rate = engine.create(text, voice=voice, speed=speed, lang=language,
+                                      sentence_pause=sentence_pause, clause_pause=clause_pause)
     if not len(samples) or not np.isfinite(samples).all() or np.max(np.abs(samples)) < 1e-6:
         raise ValueError("Kokoro retornou áudio vazio ou inválido; confira o modelo e a voz.")
+    executable = imageio_ffmpeg.get_ffmpeg_exe()
+    filters = []
+    if pitch:
+        factor = 2 ** (pitch / 12)
+        if ffmpeg_has_rubberband(executable):
+            filters.append(f"rubberband=pitch={factor:.10f}:tempo=1")
+        else:
+            # Portable fallback: shift sample rate, then compensate duration.
+            shifted_rate = round(rate * factor)
+            filters.extend([f"asetrate={shifted_rate}", f"aresample={rate}",
+                            f"atempo={rate / shifted_rate:.10f}"])
+    if volume_db:
+        filters.append(f"volume={volume_db:.2f}dB")
+    if volume_db > 0:
+        filters.append("alimiter=limit=0.95:level=false:latency=true")
     wav = path.with_suffix(".wav")
-    sf.write(wav, samples, rate)
-    run = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
-                          "-i", str(wav), "-codec:a", "libmp3lame", "-b:a", "128k", str(path)],
-                         capture_output=True, timeout=120, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    if run.returncode or not path.exists():
-        raise ValueError("Falha ao converter a voz local em MP3.")
+    try:
+        sf.write(wav, samples, rate)
+        command = [executable, "-y", "-hide_banner", "-loglevel", "error", "-i", str(wav)]
+        if filters:
+            command += ["-af", ",".join(filters)]
+        command += ["-codec:a", "libmp3lame", "-b:a", "128k", str(path)]
+        run = subprocess.run(command, capture_output=True, timeout=120,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if run.returncode or not path.exists() or path.stat().st_size < 100:
+            raise ValueError("Falha ao converter a voz local em MP3.")
+    finally:
+        wav.unlink(missing_ok=True)
